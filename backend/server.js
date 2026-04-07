@@ -25,6 +25,37 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
+/* =========================
+   🧠 DATA CLEANING FUNCTION
+========================= */
+function cleanData(data) {
+  // 📅 Normalize date → YYYY-MM-DD
+  if (data.date) {
+    const parsedDate = new Date(data.date);
+    if (!isNaN(parsedDate)) {
+      data.date = parsedDate.toISOString().split("T")[0];
+    }
+  }
+
+  // 💰 Remove commas from numbers
+  if (data.amount) {
+    data.amount = data.amount.replace(/,/g, "");
+  }
+
+  if (data.total) {
+    data.total = data.total.replace(/,/g, "");
+  }
+
+  // 🔤 Trim all fields
+  Object.keys(data).forEach((key) => {
+    if (typeof data[key] === "string") {
+      data[key] = data[key].trim();
+    }
+  });
+
+  return data;
+}
+
 // 🏠 Test route
 app.get("/", (req, res) => {
   res.send("OpenRouter + MongoDB Backend Running 🚀");
@@ -48,6 +79,8 @@ app.post("/upload-invoice", upload.single("file"), async (req, res) => {
     const prompt = `
 Extract structured invoice data.
 
+Understand context even if labels vary.
+
 Return ONLY JSON:
 {
   "vendor": "",
@@ -59,7 +92,7 @@ Return ONLY JSON:
 }
 `;
 
-    // 🔥 OpenRouter call
+    // 🔥 OpenRouter API call
     const response = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -91,7 +124,7 @@ Return ONLY JSON:
 
     console.log("RAW AI OUTPUT:", resultText);
 
-    // 🧹 Clean markdown
+    // 🧹 Remove markdown ```json ```
     resultText = resultText
       .replace(/```json/g, "")
       .replace(/```/g, "")
@@ -108,7 +141,10 @@ Return ONLY JSON:
       });
     }
 
-    // ❌ Prevent saving invalid data
+    // 🧠 Clean data
+    parsedData = cleanData(parsedData);
+
+    // ❌ Validate before saving
     if (!parsedData.vendor) {
       return res.status(400).json({
         error: "Invalid extracted data",
@@ -116,7 +152,7 @@ Return ONLY JSON:
       });
     }
 
-    // 🔥 SAVE TO MONGODB
+    // 💾 Save to MongoDB
     const savedInvoice = await Invoice.create(parsedData);
 
     res.json({
