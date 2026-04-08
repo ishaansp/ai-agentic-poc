@@ -12,6 +12,7 @@ const Invoice = require("./models/Invoice");
 connectDB();
 
 const app = express();
+app.use(express.json());
 
 // 📦 Multer config
 const storage = multer.diskStorage({
@@ -37,7 +38,7 @@ function cleanData(data) {
     }
   }
 
-  // 💰 Remove commas from numbers
+  // 💰 Remove commas
   if (data.amount) {
     data.amount = data.amount.replace(/,/g, "");
   }
@@ -46,7 +47,7 @@ function cleanData(data) {
     data.total = data.total.replace(/,/g, "");
   }
 
-  // 🔤 Trim all fields
+  // 🔤 Trim strings
   Object.keys(data).forEach((key) => {
     if (typeof data[key] === "string") {
       data[key] = data[key].trim();
@@ -56,12 +57,16 @@ function cleanData(data) {
   return data;
 }
 
-// 🏠 Test route
+/* =========================
+   🏠 HEALTH CHECK
+========================= */
 app.get("/", (req, res) => {
-  res.send("OpenRouter + MongoDB Backend Running 🚀");
+  res.send("AI Invoice Workflow Backend Running 🚀");
 });
 
-// 🤖 Upload + Process route
+/* =========================
+   🤖 UPLOAD + PROCESS
+========================= */
 app.post("/upload-invoice", upload.single("file"), async (req, res) => {
   try {
     console.log("REQ FILE:", req.file);
@@ -72,7 +77,6 @@ app.post("/upload-invoice", upload.single("file"), async (req, res) => {
 
     const filePath = path.resolve(req.file.path);
 
-    // 📂 Read image
     const imageBuffer = fs.readFileSync(filePath);
     const base64Image = imageBuffer.toString("base64");
 
@@ -92,7 +96,7 @@ Return ONLY JSON:
 }
 `;
 
-    // 🔥 OpenRouter API call
+    // 🔥 OpenRouter call
     const response = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -124,7 +128,7 @@ Return ONLY JSON:
 
     console.log("RAW AI OUTPUT:", resultText);
 
-    // 🧹 Remove markdown ```json ```
+    // 🧹 Clean markdown
     resultText = resultText
       .replace(/```json/g, "")
       .replace(/```/g, "")
@@ -144,7 +148,14 @@ Return ONLY JSON:
     // 🧠 Clean data
     parsedData = cleanData(parsedData);
 
-    // ❌ Validate before saving
+    // 🔥 WORKFLOW RULE
+    if (parsedData.amount && Number(parsedData.amount) <= 10000) {
+      parsedData.status = "approved";
+    } else {
+      parsedData.status = "pending";
+    }
+
+    // ❌ Validate
     if (!parsedData.vendor) {
       return res.status(400).json({
         error: "Invalid extracted data",
@@ -152,7 +163,7 @@ Return ONLY JSON:
       });
     }
 
-    // 💾 Save to MongoDB
+    // 💾 Save
     const savedInvoice = await Invoice.create(parsedData);
 
     res.json({
@@ -170,7 +181,87 @@ Return ONLY JSON:
   }
 });
 
-// 🚀 Start server
+/* =========================
+   📥 GET ALL INVOICES
+========================= */
+app.get("/invoices", async (req, res) => {
+  try {
+    const invoices = await Invoice.find().sort({ createdAt: -1 });
+
+    res.json({
+      message: "Invoices fetched",
+      data: invoices,
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch invoices" });
+  }
+});
+
+/* =========================
+   📥 FILTER BY STATUS
+========================= */
+app.get("/invoices/status/:status", async (req, res) => {
+  try {
+    const { status } = req.params;
+
+    const invoices = await Invoice.find({ status });
+
+    res.json({
+      message: `${status} invoices`,
+      data: invoices,
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch invoices" });
+  }
+});
+
+/* =========================
+   ✅ APPROVE INVOICE
+========================= */
+app.put("/invoices/:id/approve", async (req, res) => {
+  try {
+    const updated = await Invoice.findByIdAndUpdate(
+      req.params.id,
+      { status: "approved" },
+      { new: true }
+    );
+
+    res.json({
+      message: "Invoice approved",
+      data: updated,
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: "Approval failed" });
+  }
+});
+
+/* =========================
+   ❌ REJECT INVOICE
+========================= */
+app.put("/invoices/:id/reject", async (req, res) => {
+  try {
+    const updated = await Invoice.findByIdAndUpdate(
+      req.params.id,
+      { status: "rejected" },
+      { new: true }
+    );
+
+    res.json({
+      message: "Invoice rejected",
+      data: updated,
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: "Rejection failed" });
+  }
+});
+
+/* =========================
+   🚀 START SERVER
+========================= */
 app.listen(3000, () => {
   console.log("Server running on port 3000");
 });
