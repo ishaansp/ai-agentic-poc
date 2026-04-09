@@ -26,6 +26,31 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
+// ==========================
+// 🧠 GST VALIDATION FUNCTIONS
+// ==========================
+
+function isValidGSTIN(gstin) {
+  if (!gstin) return false;
+
+  const gstRegex = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+
+  return gstRegex.test(gstin.trim());
+}
+
+function tryFixGSTIN(gstin) {
+  if (!gstin) return gstin;
+
+  let fixed = gstin.trim();
+
+  // Try fixing ONLY if invalid
+  if (!isValidGSTIN(fixed)) {
+    fixed = fixed.replace(/^O/, "0");
+  }
+
+  return fixed;
+}
+
 /* =========================
    🧠 DATA CLEANING FUNCTION
 ========================= */
@@ -38,16 +63,16 @@ function cleanData(data) {
     }
   }
 
-  // 💰 Remove commas
+  // 💰 Clean numbers (remove ₹, commas, spaces, etc.)
   if (data.amount) {
-    data.amount = data.amount.replace(/,/g, "");
+    data.amount = data.amount.replace(/[^\d.]/g, "");
   }
 
   if (data.total) {
-    data.total = data.total.replace(/,/g, "");
+    data.total = data.total.replace(/[^\d.]/g, "");
   }
 
-  // 🔤 Trim strings
+  // 🔤 Trim all string fields
   Object.keys(data).forEach((key) => {
     if (typeof data[key] === "string") {
       data[key] = data[key].trim();
@@ -96,7 +121,7 @@ Return ONLY JSON:
 }
 `;
 
-    // 🔥 OpenRouter call
+    // 🔥 OpenRouter API
     const response = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -121,14 +146,14 @@ Return ONLY JSON:
           Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
           "Content-Type": "application/json",
         },
-      }
+      },
     );
 
     let resultText = response.data.choices[0].message.content;
 
     console.log("RAW AI OUTPUT:", resultText);
 
-    // 🧹 Clean markdown
+    // 🧹 Remove markdown
     resultText = resultText
       .replace(/```json/g, "")
       .replace(/```/g, "")
@@ -148,11 +173,50 @@ Return ONLY JSON:
     // 🧠 Clean data
     parsedData = cleanData(parsedData);
 
-    // 🔥 WORKFLOW RULE
-    if (parsedData.amount && Number(parsedData.amount) <= 10000) {
+    const totalAmount = parseFloat(
+      parsedData.total || parsedData.amount || "0",
+    );
+
+    if (totalAmount <= 10000) {
       parsedData.status = "approved";
     } else {
       parsedData.status = "pending";
+    }
+
+    // ==========================
+    // 🔍 GST VALIDATION
+    // ==========================
+
+    let gst = parsedData.gstin;
+
+    if (!isValidGSTIN(gst)) {
+      const corrected = tryFixGSTIN(gst);
+
+      if (isValidGSTIN(corrected)) {
+        parsedData.gstin = corrected;
+        parsedData.gstin_status = "corrected";
+      } else {
+        parsedData.gstin_status = "invalid";
+      }
+    } else {
+      parsedData.gstin_status = "valid";
+    }
+
+    // ==========================
+    // 🚀 ROUTING LOGIC
+    // ==========================
+
+    if (parsedData.gstin_status === "invalid") {
+      parsedData.department = "audit";
+    } else if (totalAmount > 10000) {
+      parsedData.department = "finance";
+    } else if (
+      parsedData.vendor &&
+      parsedData.vendor.toLowerCase().includes("legal")
+    ) {
+      parsedData.department = "legal";
+    } else {
+      parsedData.department = "auto-approved";
     }
 
     // ❌ Validate
@@ -163,14 +227,13 @@ Return ONLY JSON:
       });
     }
 
-    // 💾 Save
+    // 💾 Save to MongoDB
     const savedInvoice = await Invoice.create(parsedData);
 
     res.json({
       message: "Saved successfully",
       data: savedInvoice,
     });
-
   } catch (err) {
     console.error("ERROR:", err.response?.data || err.message);
 
@@ -192,7 +255,6 @@ app.get("/invoices", async (req, res) => {
       message: "Invoices fetched",
       data: invoices,
     });
-
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch invoices" });
   }
@@ -211,7 +273,6 @@ app.get("/invoices/status/:status", async (req, res) => {
       message: `${status} invoices`,
       data: invoices,
     });
-
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch invoices" });
   }
@@ -225,14 +286,13 @@ app.put("/invoices/:id/approve", async (req, res) => {
     const updated = await Invoice.findByIdAndUpdate(
       req.params.id,
       { status: "approved" },
-      { new: true }
+      { new: true },
     );
 
     res.json({
       message: "Invoice approved",
       data: updated,
     });
-
   } catch (err) {
     res.status(500).json({ error: "Approval failed" });
   }
@@ -246,18 +306,34 @@ app.put("/invoices/:id/reject", async (req, res) => {
     const updated = await Invoice.findByIdAndUpdate(
       req.params.id,
       { status: "rejected" },
-      { new: true }
+      { new: true },
     );
 
     res.json({
       message: "Invoice rejected",
       data: updated,
     });
-
   } catch (err) {
     res.status(500).json({ error: "Rejection failed" });
   }
 });
+
+app.get("/invoices/department/:dept", async (req, res) => {
+  try {
+    const invoices = await Invoice.find({
+      department: req.params.dept,
+    });
+
+    res.json({
+      message: `${req.params.dept} invoices`,
+      data: invoices,
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch" });
+  }
+});
+
 
 /* =========================
    🚀 START SERVER
