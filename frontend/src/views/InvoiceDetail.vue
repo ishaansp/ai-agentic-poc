@@ -9,7 +9,7 @@ const invoice = ref(null);
 const fetchInvoice = async () => {
   try {
     const res = await axios.get(
-      `http://192.168.1.5:3000/invoices/${route.params.id}`
+      `${import.meta.env.VITE_API_BASE}/${route.params.id}`
     );
     invoice.value = res.data.data;
   } catch (err) {
@@ -19,14 +19,14 @@ const fetchInvoice = async () => {
 
 const approveInvoice = async () => {
   await axios.put(
-    `http://192.168.1.5:3000/invoices/${route.params.id}/approve`
+    `${import.meta.env.VITE_API_BASE}/${route.params.id}/approve`
   );
   fetchInvoice();
 };
 
 const rejectInvoice = async () => {
   await axios.put(
-    `http://192.168.1.5:3000/invoices/${route.params.id}/reject`
+    `${import.meta.env.VITE_API_BASE}/${route.params.id}/reject`
   );
   fetchInvoice();
 };

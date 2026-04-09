@@ -297,7 +297,10 @@ app.put("/invoices/:id/approve", async (req, res) => {
     res.status(500).json({ error: "Approval failed" });
   }
 });
-
+app.get("/invoices/:id", async (req, res) => {
+  const invoice = await Invoice.findById(req.params.id);
+  res.json({ data: invoice });
+});
 /* =========================
    ❌ REJECT INVOICE
 ========================= */

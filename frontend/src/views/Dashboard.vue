@@ -1,14 +1,17 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, onMounted, nextTick } from "vue";
 import axios from "axios";
 import { useRouter } from "vue-router";
+import { useToast } from "vue-toastification";
 
+const toast = useToast();
 const router = useRouter();
 
 const invoices = ref([]);
 const showModal = ref(false);
 const selectedFile = ref(null);
 const showCamera = ref(false);
+const uploading = ref(false);
 
 const videoRef = ref(null);
 const canvasRef = ref(null);
@@ -19,10 +22,10 @@ const stream = ref(null);
 // ======================
 const fetchInvoices = async () => {
   try {
-    const res = await axios.get("http://192.168.1.5:3000/invoices");
+    const res = await axios.get(`${import.meta.env.VITE_API_BASE}/invoices`);
     invoices.value = res.data.data;
   } catch (err) {
-    console.error(err);
+    toast.error("Failed to load invoices");
   }
 };
 
@@ -37,27 +40,44 @@ const goToInvoice = (id) => {
 // FILE HANDLING
 // ======================
 const handleFileChange = (e) => {
-  selectedFile.value = e.target.files[0];
+  const file = e.target.files[0];
+
+  if (!file) return;
+
+  if (!file.type.startsWith("image/")) {
+    return toast.error("Only image files allowed");
+  }
+
+  selectedFile.value = file;
+  toast.success("Image selected");
 };
 
 // ======================
 // UPLOAD
 // ======================
 const uploadInvoice = async () => {
-  if (!selectedFile.value) return alert("Select file");
-
-  const formData = new FormData();
-  formData.append("file", selectedFile.value);
+  if (!selectedFile.value) {
+    return toast.error("Select or capture image first");
+  }
 
   try {
-    await axios.post("http://192.168.1.5:3000/upload-invoice", formData);
+    uploading.value = true;
+
+    const formData = new FormData();
+    formData.append("file", selectedFile.value);
+
+    await axios.post(`${import.meta.env.VITE_API_BASE}/upload-invoice`, formData);
+
+    toast.success("Invoice uploaded 🚀");
 
     showModal.value = false;
     selectedFile.value = null;
 
     fetchInvoices();
   } catch (err) {
-    console.error(err);
+    toast.error(err.response?.data?.error || "Upload failed");
+  } finally {
+    uploading.value = false;
   }
 };
 
@@ -65,26 +85,47 @@ const uploadInvoice = async () => {
 // APPROVE / REJECT
 // ======================
 const approveInvoice = async (id) => {
-  await axios.put(`http://192.168.1.5:3000/invoices/${id}/approve`);
-  fetchInvoices();
+  try {
+    await axios.put(`${import.meta.env.VITE_API_BASE}/invoices/${id}/approve`);
+    toast.success("Approved");
+    fetchInvoices();
+  } catch {
+    toast.error("Approval failed");
+  }
 };
 
 const rejectInvoice = async (id) => {
-  await axios.put(`http://192.168.1.5:3000/invoices/${id}/reject`);
-  fetchInvoices();
+  try {
+    await axios.put(`${import.meta.env.VITE_API_BASE}/invoices/${id}/reject`);
+    toast.success("Rejected");
+    fetchInvoices();
+  } catch {
+    toast.error("Rejection failed");
+  }
 };
 
 // ======================
 // CAMERA
 // ======================
 const startCamera = async () => {
-  stream.value = await navigator.mediaDevices.getUserMedia({ video: true });
-  videoRef.value.srcObject = stream.value;
-  showCamera.value = true;
+  try {
+    stream.value = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user" }
+    });
+
+    showCamera.value = true;
+
+    await nextTick();
+    videoRef.value.srcObject = stream.value;
+
+  } catch {
+    toast.error("Camera access denied");
+  }
 };
 
 const stopCamera = () => {
-  stream.value?.getTracks().forEach((t) => t.stop());
+  stream.value?.getTracks().forEach(t => t.stop());
+  stream.value = null;
   showCamera.value = false;
 };
 
@@ -95,11 +136,11 @@ const captureImage = () => {
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
 
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(video, 0, 0);
+  canvas.getContext("2d").drawImage(video, 0, 0);
 
   canvas.toBlob((blob) => {
     selectedFile.value = new File([blob], "camera.png");
+    toast.success("Image captured 📸");
   });
 
   stopCamera();
@@ -112,8 +153,8 @@ onMounted(fetchInvoices);
   <div class="min-h-screen bg-gray-100 p-4">
 
     <!-- HEADER -->
-    <div class="flex justify-between items-center mb-4">
-      <h1 class="text-xl md:text-2xl font-bold">Invoice Dashboard</h1>
+    <div class="flex justify-between mb-4">
+      <h1 class="text-xl font-bold">Invoice Dashboard</h1>
 
       <button
         class="bg-blue-600 text-white px-4 py-2 rounded"
@@ -123,20 +164,9 @@ onMounted(fetchInvoices);
       </button>
     </div>
 
-    <!-- DESKTOP TABLE -->
-    <div class="hidden md:block bg-white rounded shadow overflow-x-auto">
+    <!-- TABLE -->
+    <div class="bg-white rounded shadow overflow-x-auto hidden md:block">
       <table class="w-full">
-        <thead class="bg-gray-200">
-          <tr>
-            <th class="p-3">Vendor</th>
-            <th class="p-3">Invoice</th>
-            <th class="p-3">Amount</th>
-            <th class="p-3">Status</th>
-            <th class="p-3">Dept</th>
-            <th class="p-3">Actions</th>
-          </tr>
-        </thead>
-
         <tbody>
           <tr
             v-for="inv in invoices"
@@ -148,31 +178,27 @@ onMounted(fetchInvoices);
             <td class="p-3">{{ inv.invoice_no }}</td>
             <td class="p-3">{{ inv.total }}</td>
 
-            <td
-              class="p-3"
+            <td class="p-3"
               :class="inv.status === 'approved'
                 ? 'text-green-600'
                 : inv.status === 'rejected'
                 ? 'text-red-600'
-                : 'text-yellow-600'"
-            >
+                : 'text-yellow-600'">
               {{ inv.status }}
             </td>
 
             <td class="p-3">{{ inv.department }}</td>
 
             <td class="p-3 space-x-2">
-              <template v-if="inv.status === 'pending'">
-                <button @click.stop="approveInvoice(inv._id)" class="text-green-600">✔</button>
-                <button @click.stop="rejectInvoice(inv._id)" class="text-red-600">❌</button>
-              </template>
+              <button @click.stop="approveInvoice(inv._id)">✔</button>
+              <button @click.stop="rejectInvoice(inv._id)">❌</button>
             </td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <!-- MOBILE CARDS -->
+    <!-- MOBILE -->
     <div class="md:hidden space-y-3">
       <div
         v-for="inv in invoices"
@@ -183,60 +209,73 @@ onMounted(fetchInvoices);
         <p>{{ inv.invoice_no }}</p>
         <p>{{ inv.total }}</p>
 
-        <p
-          :class="inv.status === 'approved'
-            ? 'text-green-600'
-            : inv.status === 'rejected'
-            ? 'text-red-600'
-            : 'text-yellow-600'"
-        >
-          {{ inv.status }}
-        </p>
+        <p>{{ inv.status }}</p>
 
         <div class="mt-2 space-x-3">
-          <button @click="approveInvoice(inv._id)" class="text-green-600">✔</button>
-          <button @click="rejectInvoice(inv._id)" class="text-red-600">❌</button>
+          <button @click="approveInvoice(inv._id)">✔</button>
+          <button @click="rejectInvoice(inv._id)">❌</button>
         </div>
       </div>
     </div>
 
     <!-- MODAL -->
-    <div v-if="showModal" class="fixed inset-0 bg-black/50 flex justify-center items-center">
-      <div class="bg-white p-6 rounded w-full max-w-md">
+    <div v-if="showModal" class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center">
+      <div class="bg-white w-full md:max-w-md p-5 rounded-t-xl md:rounded">
 
-        <h2 class="text-xl font-bold mb-4">Upload Invoice</h2>
+        <h2 class="font-bold mb-3">Upload Invoice</h2>
 
         <!-- FILE -->
-        <input type="file" @change="handleFileChange" />
+        <div v-if="!showCamera">
+          <input type="file" @change="handleFileChange" />
+
+          <button
+            class="bg-green-600 text-white w-full py-2 rounded mt-3"
+            @click="startCamera"
+          >
+            📸 Use Camera
+          </button>
+        </div>
 
         <!-- CAMERA -->
-        <button
-          class="bg-green-600 text-white px-3 py-2 rounded mt-2"
-          @click="startCamera"
-        >
-          📸 Camera
-        </button>
+        <div v-if="showCamera">
+          <video ref="videoRef" autoplay playsinline class="w-full h-64 bg-black rounded"></video>
 
-        <!-- PREVIEW -->
-        <img
-          v-if="selectedFile"
-          :src="URL.createObjectURL(selectedFile)"
-          class="mt-3 rounded"
-        />
-
-        <!-- CAMERA VIEW -->
-        <div v-if="showCamera" class="mt-3">
-          <video ref="videoRef" autoplay class="w-full"></video>
           <canvas ref="canvasRef" class="hidden"></canvas>
 
-          <button @click="captureImage" class="bg-blue-600 text-white px-3 py-2 mt-2">Capture</button>
-          <button @click="stopCamera" class="bg-gray-500 text-white px-3 py-2 mt-2">Cancel</button>
+          <div class="flex gap-2 mt-3">
+            <button @click="captureImage" class="flex-1 bg-blue-600 text-white py-2 rounded">Capture</button>
+            <button @click="stopCamera" class="flex-1 bg-gray-500 text-white py-2 rounded">Cancel</button>
+          </div>
+        </div>
+
+        <!-- PREVIEW -->
+        <div v-if="selectedFile" class="mt-3">
+          <img
+            :src="URL.createObjectURL(selectedFile)"
+            class="w-full max-h-60 object-contain rounded border"
+          />
+
+          <button
+            class="text-red-600 text-sm mt-1"
+            @click="selectedFile = null"
+          >
+            Remove
+          </button>
         </div>
 
         <!-- ACTIONS -->
-        <div class="flex justify-end mt-4 space-x-2">
-          <button @click="showModal = false" class="bg-gray-300 px-3 py-2 rounded">Cancel</button>
-          <button @click="uploadInvoice" class="bg-blue-600 text-white px-3 py-2 rounded">Upload</button>
+        <div class="flex justify-end mt-4 gap-2">
+          <button @click="showModal = false" class="bg-gray-300 px-3 py-2 rounded">
+            Cancel
+          </button>
+
+          <button
+            @click="uploadInvoice"
+            :disabled="uploading"
+            class="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-50"
+          >
+            {{ uploading ? "Uploading..." : "Upload" }}
+          </button>
         </div>
 
       </div>
