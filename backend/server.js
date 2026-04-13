@@ -17,16 +17,26 @@ app.use(express.json());
 app.use(cors({ origin: "*" }));
 
 // ==========================
+// 📦 FIXED UPLOAD PATH (RENDER SAFE)
+// ==========================
+const uploadPath = path.join(__dirname, "uploads");
+
+// ✅ Create folder if not exists
+if (!fs.existsSync(uploadPath)) {
+  fs.mkdirSync(uploadPath, { recursive: true });
+}
+
+// ==========================
 // 📂 SERVE UPLOADS
 // ==========================
-app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
+app.use("/uploads", express.static(uploadPath));
 
 // ==========================
 // 📦 MULTER CONFIG
 // ==========================
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, "../uploads/");
+    cb(null, uploadPath);
   },
   filename: function (req, file, cb) {
     cb(null, Date.now() + path.extname(file.originalname));
@@ -46,7 +56,6 @@ function isValidGSTIN(gstin) {
 
 function tryFixGSTIN(gstin) {
   if (!gstin) return gstin;
-
   let fixed = gstin.trim();
 
   if (!isValidGSTIN(fixed)) {
@@ -67,17 +76,12 @@ function cleanData(data) {
     }
   }
 
-  if (data.amount) {
-    data.amount = data.amount.replace(/[^\d.]/g, "");
-  }
+  if (data.amount) data.amount = data.amount.replace(/[^\d.]/g, "");
+  if (data.total) data.total = data.total.replace(/[^\d.]/g, "");
 
-  if (data.total) {
-    data.total = data.total.replace(/[^\d.]/g, "");
-  }
-
-  Object.keys(data).forEach((key) => {
-    if (typeof data[key] === "string") {
-      data[key] = data[key].trim();
+  Object.keys(data).forEach((k) => {
+    if (typeof data[k] === "string") {
+      data[k] = data[k].trim();
     }
   });
 
@@ -96,28 +100,22 @@ app.get("/", (req, res) => {
 // ==========================
 app.post("/upload-invoice", upload.single("file"), async (req, res) => {
   try {
+    console.log("REQ FILE:", req.file);
+
     if (!req.file) {
       return res.status(400).json({ error: "File not received" });
     }
 
-    const filePath = path.resolve(req.file.path);
+    // ✅ FIX: correct file path (IMPORTANT)
+    const filePath = path.join(uploadPath, req.file.filename);
 
     const fileBuffer = fs.readFileSync(filePath);
     const base64File = fileBuffer.toString("base64");
 
     const mimeType = req.file.mimetype;
 
-    const fileData = {
-      type: "image_url",
-      image_url: {
-        url: `data:${mimeType};base64,${base64File}`,
-      },
-    };
-
     const prompt = `
 Extract structured invoice data.
-
-Understand context even if labels vary.
 
 Return ONLY JSON:
 {
@@ -139,7 +137,12 @@ Return ONLY JSON:
             role: "user",
             content: [
               { type: "text", text: prompt },
-              fileData,
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:${mimeType};base64,${base64File}`,
+                },
+              },
             ],
           },
         ],
@@ -154,7 +157,6 @@ Return ONLY JSON:
 
     let resultText = response.data.choices[0].message.content;
 
-    // 🧹 Remove markdown
     resultText = resultText
       .replace(/```json/g, "")
       .replace(/```/g, "")
@@ -172,7 +174,7 @@ Return ONLY JSON:
     }
 
     // ==========================
-    // 🧹 CLEAN DATA
+    // 🧹 CLEAN
     // ==========================
     parsedData = cleanData(parsedData);
 
@@ -238,6 +240,7 @@ Return ONLY JSON:
       message: "Saved successfully",
       data: savedInvoice,
     });
+
   } catch (err) {
     console.error("ERROR:", err.response?.data || err.message);
 
@@ -257,7 +260,7 @@ app.get("/invoices", async (req, res) => {
 });
 
 // ==========================
-// 📄 GET SINGLE
+// 📄 GET ONE
 // ==========================
 app.get("/invoices/:id", async (req, res) => {
   const invoice = await Invoice.findById(req.params.id);
@@ -265,7 +268,7 @@ app.get("/invoices/:id", async (req, res) => {
 });
 
 // ==========================
-// 📊 FILTER
+// 📊 FILTERS
 // ==========================
 app.get("/invoices/status/:status", async (req, res) => {
   const invoices = await Invoice.find({ status: req.params.status });
@@ -284,7 +287,7 @@ app.put("/invoices/:id/approve", async (req, res) => {
   const updated = await Invoice.findByIdAndUpdate(
     req.params.id,
     { status: "approved" },
-    { new: true }
+    { returnDocument: "after" }
   );
 
   res.json({ data: updated });
@@ -297,7 +300,7 @@ app.put("/invoices/:id/reject", async (req, res) => {
   const updated = await Invoice.findByIdAndUpdate(
     req.params.id,
     { status: "rejected" },
-    { new: true }
+    { returnDocument: "after" }
   );
 
   res.json({ data: updated });
