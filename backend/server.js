@@ -6,6 +6,7 @@ const path = require("path");
 const fs = require("fs");
 const axios = require("axios");
 const cors = require("cors");
+const { fromPath } = require("pdf2pic"); // ✅ ADDED
 
 const connectDB = require("./db");
 const Invoice = require("./models/Invoice");
@@ -21,7 +22,6 @@ app.use(cors({ origin: "*" }));
 // ==========================
 const uploadPath = path.join(__dirname, "uploads");
 
-// ✅ Create folder if not exists
 if (!fs.existsSync(uploadPath)) {
   fs.mkdirSync(uploadPath, { recursive: true });
 }
@@ -106,13 +106,43 @@ app.post("/upload-invoice", upload.single("file"), async (req, res) => {
       return res.status(400).json({ error: "File not received" });
     }
 
-    // ✅ FIX: correct file path (IMPORTANT)
     const filePath = path.join(uploadPath, req.file.filename);
-
-    const fileBuffer = fs.readFileSync(filePath);
-    const base64File = fileBuffer.toString("base64");
-
     const mimeType = req.file.mimetype;
+
+    let base64File;
+
+    // ==========================
+    // 🆕 PDF SUPPORT (ADDED ONLY)
+    // ==========================
+    if (mimeType.includes("pdf")) {
+      const convert = fromPath(filePath, {
+        density: 100,
+        saveFilename: "converted",
+        savePath: uploadPath,
+        format: "png",
+        width: 800,
+        height: 1000,
+      });
+
+      const page = await convert(1); // first page only
+
+      const imageBuffer = fs.readFileSync(page.path);
+      base64File = imageBuffer.toString("base64");
+    }
+
+    // ==========================
+    // EXISTING IMAGE FLOW (UNCHANGED)
+    // ==========================
+    else if (mimeType.includes("image")) {
+      const fileBuffer = fs.readFileSync(filePath);
+      base64File = fileBuffer.toString("base64");
+    }
+
+    else {
+      return res.status(400).json({
+        error: "Unsupported file type",
+      });
+    }
 
     const prompt = `
 Extract structured invoice data.
@@ -140,7 +170,7 @@ Return ONLY JSON:
               {
                 type: "image_url",
                 image_url: {
-                  url: `data:${mimeType};base64,${base64File}`,
+                  url: `data:image/png;base64,${base64File}`,
                 },
               },
             ],
@@ -252,24 +282,19 @@ Return ONLY JSON:
 });
 
 // ==========================
-// 📥 GET ALL
+// ALL OTHER ROUTES UNCHANGED
 // ==========================
+
 app.get("/invoices", async (req, res) => {
   const invoices = await Invoice.find().sort({ createdAt: -1 });
   res.json({ data: invoices });
 });
 
-// ==========================
-// 📄 GET ONE
-// ==========================
 app.get("/invoices/:id", async (req, res) => {
   const invoice = await Invoice.findById(req.params.id);
   res.json({ data: invoice });
 });
 
-// ==========================
-// 📊 FILTERS
-// ==========================
 app.get("/invoices/status/:status", async (req, res) => {
   const invoices = await Invoice.find({ status: req.params.status });
   res.json({ data: invoices });
@@ -280,35 +305,24 @@ app.get("/invoices/department/:dept", async (req, res) => {
   res.json({ data: invoices });
 });
 
-// ==========================
-// ✅ APPROVE
-// ==========================
 app.put("/invoices/:id/approve", async (req, res) => {
   const updated = await Invoice.findByIdAndUpdate(
     req.params.id,
     { status: "approved" },
     { returnDocument: "after" }
   );
-
   res.json({ data: updated });
 });
 
-// ==========================
-// ❌ REJECT
-// ==========================
 app.put("/invoices/:id/reject", async (req, res) => {
   const updated = await Invoice.findByIdAndUpdate(
     req.params.id,
     { status: "rejected" },
     { returnDocument: "after" }
   );
-
   res.json({ data: updated });
 });
 
-// ==========================
-// 🚀 START SERVER
-// ==========================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
