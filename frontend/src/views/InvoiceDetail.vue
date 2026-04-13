@@ -6,80 +6,51 @@ import { useRoute } from "vue-router";
 const route = useRoute();
 const invoice = ref(null);
 
+// ✅ FIX: define once and reuse everywhere
+const API_BASE = import.meta.env.VITE_API_BASE;
+
 const fetchInvoice = async () => {
   try {
     const res = await axios.get(
-      `${import.meta.env.VITE_API_BASE}/${route.params.id}`
+      `${API_BASE}/invoices/${route.params.id}`
     );
     invoice.value = res.data.data;
   } catch (err) {
-    console.error(err);
+    console.error("Fetch error:", err);
   }
-};
-
-const approveInvoice = async () => {
-  await axios.put(
-    `${import.meta.env.VITE_API_BASE}/${route.params.id}/approve`
-  );
-  fetchInvoice();
-};
-
-const rejectInvoice = async () => {
-  await axios.put(
-    `${import.meta.env.VITE_API_BASE}/${route.params.id}/reject`
-  );
-  fetchInvoice();
 };
 
 onMounted(fetchInvoice);
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-100 p-4" v-if="invoice">
-    <div class="bg-white p-6 rounded shadow max-w-3xl mx-auto">
+  <div v-if="invoice" class="p-4">
 
-      <h1 class="text-2xl font-bold mb-4">Invoice Details</h1>
+    <h1 class="text-xl font-bold mb-4">Invoice Detail</h1>
 
-      <!-- Details -->
-      <div class="space-y-2">
-        <p><b>Vendor:</b> {{ invoice.vendor }}</p>
-        <p><b>GSTIN:</b> {{ invoice.gstin }}</p>
-        <p><b>Invoice No:</b> {{ invoice.invoice_no }}</p>
-        <p><b>Date:</b> {{ invoice.date }}</p>
-        <p><b>Amount:</b> {{ invoice.amount }}</p>
-        <p><b>Total:</b> {{ invoice.total }}</p>
-        <p><b>Status:</b> {{ invoice.status }}</p>
-        <p><b>Department:</b> {{ invoice.department }}</p>
-      </div>
+    <p><b>Vendor:</b> {{ invoice.vendor }}</p>
+    <p><b>Invoice:</b> {{ invoice.invoice_no }}</p>
+    <p><b>Total:</b> {{ invoice.total }}</p>
+    <p><b>Status:</b> {{ invoice.status }}</p>
 
-      <!-- Image -->
-      <div class="mt-4">
-        <img
-          v-if="invoice.image_url"
-          :src="invoice.image_url"
-          class="w-full rounded border"
-        />
-      </div>
+    <!-- IMAGE -->
+    <img
+      v-if="invoice.file_type?.includes('image')"
+      :src="`${API_BASE}/uploads/${invoice.image_url}`"
+      class="mt-4 w-full rounded border"
+    />
 
-      <!-- Actions -->
-      <div class="mt-6 space-x-4">
-        <button
-          v-if="invoice.status === 'pending'"
-          @click="approveInvoice"
-          class="bg-green-600 text-white px-4 py-2 rounded"
-        >
-          Approve
-        </button>
+    <!-- PDF -->
+    <iframe
+      v-else-if="invoice.file_type?.includes('pdf')"
+      :src="`${API_BASE}/uploads/${invoice.image_url}`"
+      class="w-full h-[500px] mt-4 border"
+    ></iframe>
 
-        <button
-          v-if="invoice.status === 'pending'"
-          @click="rejectInvoice"
-          class="bg-red-600 text-white px-4 py-2 rounded"
-        >
-          Reject
-        </button>
-      </div>
+    <!-- FALLBACK -->
+    <p v-else class="mt-4 text-gray-500">
+      No preview available for this file type
+    </p>
 
-    </div>
   </div>
 </template>

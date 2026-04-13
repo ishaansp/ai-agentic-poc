@@ -7,20 +7,26 @@ const invoiceSchema = new mongoose.Schema(
     date: String,
     amount: String,
     total: String,
+
+    image_url: String,
+    file_type: String,
+
     status: {
       type: String,
       default: "pending",
     },
+
     gstin_status: {
       type: String,
       default: "unknown",
     },
+
     department: {
       type: String,
       default: "none",
     },
   },
-  { timestamps: true },
+  { timestamps: true }
 );
 
 module.exports = mongoose.model("Invoice", invoiceSchema);
