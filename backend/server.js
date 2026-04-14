@@ -1,5 +1,5 @@
 require("dotenv").config();
-
+const nodemailer = require("nodemailer");
 const express = require("express");
 const multer = require("multer");
 const path = require("path");
@@ -45,6 +45,36 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
+
+async function sendEmail(to, invoice) {
+  try {
+    const transporter = nodemailer.createTransport({
+      host: "smtp.office365.com",
+      port: 587,
+      secure: false,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to,
+      subject: `Invoice ${invoice.invoice_no}`,
+      text: `
+Vendor: ${invoice.vendor}
+Amount: ${invoice.total}
+Status: ${invoice.status}
+Department: ${invoice.department}
+      `,
+    });
+
+    console.log("📧 Email sent to:", to);
+  } catch (err) {
+    console.error("❌ Email error:", err.message);
+  }
+}
 // ==========================
 // 🧠 GST VALIDATION
 // ==========================
@@ -136,9 +166,7 @@ app.post("/upload-invoice", upload.single("file"), async (req, res) => {
     else if (mimeType.includes("image")) {
       const fileBuffer = fs.readFileSync(filePath);
       base64File = fileBuffer.toString("base64");
-    }
-
-    else {
+    } else {
       return res.status(400).json({
         error: "Unsupported file type",
       });
@@ -182,7 +210,7 @@ Return ONLY JSON:
           Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
           "Content-Type": "application/json",
         },
-      }
+      },
     );
 
     let resultText = response.data.choices[0].message.content;
@@ -209,7 +237,7 @@ Return ONLY JSON:
     parsedData = cleanData(parsedData);
 
     const totalAmount = parseFloat(
-      parsedData.total || parsedData.amount || "0"
+      parsedData.total || parsedData.amount || "0",
     );
 
     // ==========================
@@ -265,12 +293,11 @@ Return ONLY JSON:
     }
 
     const savedInvoice = await Invoice.create(parsedData);
-
+    await handleWorkflow(savedInvoice);
     res.json({
       message: "Saved successfully",
       data: savedInvoice,
     });
-
   } catch (err) {
     console.error("ERROR:", err.response?.data || err.message);
 
@@ -309,7 +336,7 @@ app.put("/invoices/:id/approve", async (req, res) => {
   const updated = await Invoice.findByIdAndUpdate(
     req.params.id,
     { status: "approved" },
-    { returnDocument: "after" }
+    { returnDocument: "after" },
   );
   res.json({ data: updated });
 });
@@ -318,11 +345,30 @@ app.put("/invoices/:id/reject", async (req, res) => {
   const updated = await Invoice.findByIdAndUpdate(
     req.params.id,
     { status: "rejected" },
-    { returnDocument: "after" }
+    { returnDocument: "after" },
   );
   res.json({ data: updated });
 });
 
+// ==========================
+// 🧠 WORKFLOW ENGINE
+// ==========================
+async function handleWorkflow(invoice) {
+  console.log("🚀 Running workflow for:", invoice._id);
+
+  if (invoice.department === "audit") {
+    console.log("Send to Audit Team");
+    await sendEmail("ishaan_sharma@softprodigy.com", invoice);
+  } else if (invoice.department === "finance") {
+    console.log("Send to Finance Team");
+    await sendEmail("ishaan_sharma@softprodigy.com", invoice);
+  } else if (invoice.department === "legal") {
+    console.log("Send to Legal Team");
+    await sendEmail("ishaan_sharma@softprodigy.com", invoice);
+  } else if (invoice.department === "auto-approved") {
+    console.log("Auto Approved → No action needed");
+  }
+}
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
